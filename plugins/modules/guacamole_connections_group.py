@@ -1,4 +1,5 @@
 #!/usr/bin/python
+# -*- coding: utf-8 -*-
 
 # Copyright: (c) 2020, Pablo Escobar <pablo.escobarlopez@unibas.ch>
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
@@ -8,421 +9,327 @@ import json
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.urls import open_url
-from ansible_collections.scicore.guacamole.plugins.module_utils.guacamole import GuacamoleError, \
-    guacamole_get_token, guacamole_get_connections, guacamole_get_connections_group_id, guacamole_get_connections_groups
+from ansible_collections.scicore.guacamole.plugins.module_utils.guacamole import (
+    GuacamoleError,
+    guacamole_get_connections,
+    guacamole_get_connections_group_id,
+    guacamole_get_connections_groups,
+    guacamole_get_token,
+)
+
 __metaclass__ = type
 
 ANSIBLE_METADATA = {
-    'metadata_version': '1.1',
-    'status': ['preview'],
-    'supported_by': 'community'
+    "metadata_version": "1.1",
+    "status": ["preview"],
+    "supported_by": "community",
 }
 
-DOCUMENTATION = '''
+DOCUMENTATION = """
 ---
 module: guacamole_connections_group
 
-short_description: Administer guacamole connections groups using the rest API
+short_description: Manage Apache Guacamole connection-groups through the REST API
 
 version_added: "2.9"
 
 description:
-    - "Add or remove guacamole connections groups."
+  - Create, update, delete or list connection-groups in an Apache Guacamole server.
 
 options:
-    base_url:
-        description:
-            - Url to access the guacamole API
-        required: true
-        aliases: ['url']
-        type: str
-
-    auth_username:
-        description:
-            - Guacamole admin user to login to the API
-        required: true
-        type: str
-
-    auth_password:
-        description:
-            - Guacamole admin user password to login to the API
-        required: true
-        type: str
-
-    validate_certs:
-        description:
-            - Validate ssl certs?
-        default: true
-        type: bool
-
-    group_name:
-        description:
-            - Group name to create
-        required: true
-        type: str
-
-    parent_group:
-        description:
-            - Parent group in case this is a sub-group
-        default: 'ROOT'
-        aliases: ['parentIdentifier']
-        type: str
-
-    group_type:
-        description:
-            - Choose the group type
-        default: 'ORGANIZATIONAL'
-        type: str
-        choices:
-            - "ORGANIZATIONAL"
-            - "BALANCING"
-
-    max_connections:
-        description:
-            - Max connections in this group
-        type: int
-
-    max_connections_per_user:
-        description:
-            - Max connections per user in this group
-        type: int
-
-    enable_session_affinity:
-        description:
-            - Enable session affinity for this group
-        type: bool
-
-    state:
-        description:
-            - Create or delete the connections group?
-        default: 'present'
-        type: str
-        choices:
-            - present
-            - absent
-
-    force_deletion:
-        description:
-            - Force deletion of the group even if it has child connections
-        default: 'False'
-        type: bool
+  base_url:
+    description: URL to access the Guacamole API
+    required: true
+    aliases: [url]
+    type: str
+  auth_username:
+    description: Guacamole admin user to login to the API
+    required: true
+    type: str
+  auth_password:
+    description: Guacamole admin user password to login to the API
+    required: true
+    type: str
+  validate_certs:
+    description: Validate TLS certificates?
+    type: bool
+    default: true
+  group_name:
+    description: Name of the connection-group to create / update / delete
+    type: str
+  parent_group:
+    description: Parent group (identifier) if this shall be a subgroup
+    type: str
+    aliases: [parentIdentifier]
+    default: ROOT
+  group_type:
+    description: Group type
+    type: str
+    choices: [ORGANIZATIONAL, BALANCING]
+    default: ORGANIZATIONAL
+  max_connections:
+    description: Maximum simultaneous connections allowed in this group
+    type: int
+  max_connections_per_user:
+    description: Maximum simultaneous connections per user in this group
+    type: int
+  enable_session_affinity:
+    description: Enable session affinity for this group
+    type: bool
+  state:
+    description: Desired state
+    type: str
+    choices: [present, absent, list]
+    default: present
+  force_deletion:
+    description: Force deletion even if the group contains child connections
+    type: bool
+    default: false
 
 author:
-    - Pablo Escobar Lopez (@pescobar)
-'''
+  - Pablo Escobar Lopez (@pescobar)
+"""
 
-EXAMPLES = '''
+EXAMPLES = """
+- name: List every connection-group
+  scicore.guacamole.guacamole_connections_group:
+    base_url: http://localhost/guacamole
+    auth_username: guacadmin
+    auth_password: guacadmin
+    state: list
 
-- name: Create a new connections group "group_3"
+- name: Create connections group 'group_3'
   scicore.guacamole.guacamole_connections_group:
     base_url: http://localhost/guacamole
     auth_username: guacadmin
     auth_password: guacadmin
     group_name: group_3
 
-- name: Delete connections group "group_4"
+- name: Delete connections group 'group_4'
   scicore.guacamole.guacamole_connections_group:
     base_url: http://localhost/guacamole
     auth_username: guacadmin
     auth_password: guacadmin
     group_name: group_4
     state: absent
+"""
 
-- name: Force deletion of connections group "group_5 which has child connections"
-  scicore.guacamole.guacamole_connections_group:
-    base_url: http://localhost/guacamole
-    auth_username: guacadmin
-    auth_password: guacadmin
-    group_name: group_4
-    state: absent
-    force_deletion: true
-'''
-
-RETURN = '''
+RETURN = """
 connections_group_info:
-    description: Information about the created or updated connections group
-    type: dict
-    returned: always
+  description: Details of the group that was created, updated or removed
+  returned: when state is C(present) or C(absent)
+  type: dict
+connections_groups:
+  description: Dictionary of every existing connection-group
+  returned: when state is C(list)
+  type: dict
 message:
-    description: Some extra info about what the module did
-    type: str
-    returned: always
-'''
+  description: Informational message
+  returned: always
+  type: str
+"""
 
-URL_ADD_CONNECTIONS_GROUP = "{url}/api/session/data/{datasource}/connectionGroups/?token={token}"
-URL_UPDATE_CONNECTIONS_GROUP = "{url}/api/session/data/{datasource}/connectionGroups/{group_numeric_id}?token={token}"
+URL_ADD_CONNECTIONS_GROUP = (
+    "{url}/api/session/data/{datasource}/connectionGroups/?token={token}"
+)
+URL_UPDATE_CONNECTIONS_GROUP = (
+    "{url}/api/session/data/{datasource}/connectionGroups/{group_id}?token={token}"
+)
 URL_DELETE_CONNECTIONS_GROUP = URL_UPDATE_CONNECTIONS_GROUP
 
 
-def guacamole_populate_connections_group_payload(module_params):
-    """
-    Populate the json that we send to the guaccamole API to create new connections group
-    """
-
-    payload = {
-        "parentIdentifier": module_params['parent_group'],
-        "name": module_params['group_name'],
-        "type": module_params['group_type'],
+def _build_payload(params):
+    return {
+        "parentIdentifier": params["parent_group"],
+        "name": params["group_name"],
+        "type": params["group_type"],
         "attributes": {
-            "max-connections": module_params['max_connections'],
-            "max-connections-per-user": module_params['max_connections_per_user'],
-            "enable-session-affinity": module_params['enable_session_affinity'],
-        }
+            "max-connections": params["max_connections"],
+            "max-connections-per-user": params["max_connections_per_user"],
+            "enable-session-affinity": params["enable_session_affinity"],
+        },
     }
 
-    return payload
 
-
-def guacamole_add_connections_group(base_url, validate_certs, datasource, auth_token, payload):
-    """
-    Add a new connections group to the guacamole server.
-    """
-
-    url_add_connections_group = URL_ADD_CONNECTIONS_GROUP.format(
-        url=base_url, datasource=datasource, token=auth_token)
-
-    try:
-        headers = {'Content-Type': 'application/json'}
-        open_url(url_add_connections_group, method='POST', validate_certs=validate_certs,
-                 headers=headers, data=json.dumps(payload))
-    except Exception as e:
-        raise GuacamoleError('Could not add a new connections group in %s: %s'
-                             % (url_add_connections_group, str(e)))
-
-
-def guacamole_update_connections_group(base_url, validate_certs, datasource, auth_token, group_numeric_id, payload):
-    """
-    Update an existing connections group
-    """
-
-    url_update_connections_group = URL_UPDATE_CONNECTIONS_GROUP.format(
-        url=base_url, datasource=datasource, group_numeric_id=group_numeric_id, token=auth_token)
-
-    try:
-        headers = {'Content-Type': 'application/json'}
-        open_url(url_update_connections_group, method='PUT', validate_certs=validate_certs,
-                 headers=headers, data=json.dumps(payload))
-    except Exception as e:
-        raise GuacamoleError('Could not update a connections group in %s: %s'
-                             % (url_update_connections_group, str(e)))
-
-
-def guacamole_delete_connections_group(base_url, validate_certs, datasource, auth_token, group_numeric_id):
-    """
-    Delete a connections group
-    """
-
-    url_delete_connections_group = URL_DELETE_CONNECTIONS_GROUP.format(
-        url=base_url, datasource=datasource, group_numeric_id=group_numeric_id, token=auth_token)
-
-    try:
-        headers = {'Content-Type': 'application/json'}
-        open_url(url_delete_connections_group, method='DELETE', validate_certs=validate_certs, headers=headers)
-    except Exception as e:
-        raise GuacamoleError('Could not delete a connections group in %s: %s'
-                             % (url_delete_connections_group, str(e)))
+def _api_call(url, method, validate_certs, data=None):
+    headers = {"Content-Type": "application/json"}
+    open_url(url, method=method, validate_certs=validate_certs, headers=headers, data=data)
 
 
 def main():
-
-    # define the available arguments/parameters that a user can pass to
-    # the module
     module_args = dict(
-        base_url=dict(type='str', aliases=['url'], required=True),
-        auth_username=dict(type='str', required=True),
-        auth_password=dict(type='str', required=True, no_log=True),
-        validate_certs=dict(type='bool', default=True),
-        group_name=dict(type='str', required=True),
-        parent_group=dict(type='str', default='ROOT'),
-        group_type=dict(type='str', choices=['ORGANIZATIONAL', 'BALANCING'], default='ORGANIZATIONAL'),
-        max_connections=dict(type='int'),
-        max_connections_per_user=dict(type='int'),
-        enable_session_affinity=dict(type='bool'),
-        state=dict(type='str', choices=['absent', 'present'], default='present'),
-        force_deletion=dict(type='bool', default=False)
+        base_url=dict(type="str", aliases=["url"], required=True),
+        auth_username=dict(type="str", required=True),
+        auth_password=dict(type="str", required=True, no_log=True),
+        validate_certs=dict(type="bool", default=True),
+        group_name=dict(type="str"),
+        parent_group=dict(type="str", default="ROOT"),
+        group_type=dict(type="str", choices=["ORGANIZATIONAL", "BALANCING"], default="ORGANIZATIONAL"),
+        max_connections=dict(type="int"),
+        max_connections_per_user=dict(type="int"),
+        enable_session_affinity=dict(type="bool"),
+        state=dict(type="str", choices=["present", "absent", "list"], default="present"),
+        force_deletion=dict(type="bool", default=False),
     )
 
-    result = dict(changed=False, msg='', connections_group_info={})
-
-    module = AnsibleModule(
-        argument_spec=module_args,
-        supports_check_mode=False
+    result = dict(
+        changed=False,
+        msg="",
+        connections_group_info={},
+        connections_groups={},
     )
 
-    # Obtain access token, initialize API
+    module = AnsibleModule(argument_spec=module_args, supports_check_mode=False)
+
     try:
-        guacamole_token = guacamole_get_token(
-            base_url=module.params.get('base_url'),
-            auth_username=module.params.get('auth_username'),
-            auth_password=module.params.get('auth_password'),
-            validate_certs=module.params.get('validate_certs'),
+        token = guacamole_get_token(
+            base_url=module.params["base_url"],
+            auth_username=module.params["auth_username"],
+            auth_password=module.params["auth_password"],
+            validate_certs=module.params["validate_certs"],
         )
-    except GuacamoleError as e:
-        module.fail_json(msg=str(e))
+    except GuacamoleError as exc:
+        module.fail_json(msg=str(exc))
 
-    # get the parent_group numeric ID if parent_group is not ROOT
-    if module.params.get('parent_group') != "ROOT":
+    datasource = token["dataSource"]
+    auth_token = token["authToken"]
+
+    # LIST ------------------------------------------------------------------ #
+    if module.params["state"] == "list":
         try:
-            module.params['parent_group'] = guacamole_get_connections_group_id(
-                base_url=module.params.get('base_url'),
-                validate_certs=module.params.get('validate_certs'),
-                datasource=guacamole_token['dataSource'],
-                group=module.params.get('parent_group'),
-                auth_token=guacamole_token['authToken'],
+            result["connections_groups"] = guacamole_get_connections_groups(
+                base_url=module.params["base_url"],
+                validate_certs=module.params["validate_certs"],
+                datasource=datasource,
+                auth_token=auth_token,
             )
-        except GuacamoleError as e:
-            module.fail_json(msg=str(e))
+        except GuacamoleError as exc:
+            module.fail_json(msg=str(exc))
+        module.exit_json(**result)
 
-    # Get existing guacamole connections groups before doing anything else
+    # From here on, present/absent require a group_name
+    if not module.params["group_name"]:
+        module.fail_json(msg="parameter 'group_name' is required when state is 'present' or 'absent'")
+
+    # Resolve parent group identifier when not ROOT
+    if module.params["parent_group"] != "ROOT":
+        try:
+            module.params["parent_group"] = guacamole_get_connections_group_id(
+                base_url=module.params["base_url"],
+                validate_certs=module.params["validate_certs"],
+                datasource=datasource,
+                group=module.params["parent_group"],
+                auth_token=auth_token,
+            )
+        except GuacamoleError as exc:
+            module.fail_json(msg=str(exc))
+
+    # Current groups before modifications
     try:
-        guacamole_connections_groups_before = guacamole_get_connections_groups(
-            base_url=module.params.get('base_url'),
-            validate_certs=module.params.get('validate_certs'),
-            datasource=guacamole_token['dataSource'],
-            auth_token=guacamole_token['authToken'],
+        groups_before = guacamole_get_connections_groups(
+            base_url=module.params["base_url"],
+            validate_certs=module.params["validate_certs"],
+            datasource=datasource,
+            auth_token=auth_token,
         )
-    except GuacamoleError as e:
-        module.fail_json(msg=str(e))
+    except GuacamoleError as exc:
+        module.fail_json(msg=str(exc))
 
-    # check if the connections group already exists
-    # If the connections group exists we get the numeric id
-    guacamole_connections_group_exists = False
-    for group_id, group_info in guacamole_connections_groups_before.items():
-        if group_info['name'] == module.params.get('group_name'):
-            group_numeric_id = group_info['identifier']
-            guacamole_connections_group_exists = True
+    group_exists = False
+    group_id = None
+    for gid, ginfo in groups_before.items():
+        if ginfo["name"] == module.params["group_name"]:
+            group_exists = True
+            group_id = ginfo["identifier"]
             break
 
-    # module arg state=present so we have to create a new connections group
-    # or update an existing one
-    if module.params.get('state') == 'present':
-
-        # populate the payload(json) with the group info that we
-        # will send to the API
-        payload = guacamole_populate_connections_group_payload(module.params)
-
-        # the group already exists so we update it
-        if guacamole_connections_group_exists:
-
+    # PRESENT --------------------------------------------------------------- #
+    if module.params["state"] == "present":
+        payload = json.dumps(_build_payload(module.params))
+        if group_exists:
             try:
-                guacamole_update_connections_group(
-                    base_url=module.params.get('base_url'),
-                    validate_certs=module.params.get('validate_certs'),
-                    datasource=guacamole_token['dataSource'],
-                    auth_token=guacamole_token['authToken'],
-                    group_numeric_id=group_numeric_id,
-                    payload=payload
+                _api_call(
+                    URL_UPDATE_CONNECTIONS_GROUP.format(
+                        url=module.params["base_url"], datasource=datasource, group_id=group_id, token=auth_token
+                    ),
+                    "PUT",
+                    module.params["validate_certs"],
+                    payload,
                 )
-            except GuacamoleError as e:
-                module.fail_json(msg=str(e))
-
-        # if the group doesn't exists we add it
+            except Exception as exc:
+                module.fail_json(msg=str(exc))
         else:
-
             try:
-                guacamole_add_connections_group(
-                    base_url=module.params.get('base_url'),
-                    validate_certs=module.params.get('validate_certs'),
-                    datasource=guacamole_token['dataSource'],
-                    auth_token=guacamole_token['authToken'],
-                    payload=payload
+                _api_call(
+                    URL_ADD_CONNECTIONS_GROUP.format(
+                        url=module.params["base_url"], datasource=datasource, token=auth_token
+                    ),
+                    "POST",
+                    module.params["validate_certs"],
+                    payload,
                 )
-            except GuacamoleError as e:
-                module.fail_json(msg=str(e))
+                result["msg"] = "Connections group '{}' created".format(module.params["group_name"])
+            except Exception as exc:
+                module.fail_json(msg=str(exc))
 
-            result['msg'] = "Connections group '%s' added" % module.params.get('group_name')
-
-    # module arg state=absent so we have to delete connections group
-    if module.params.get('state') == 'absent':
-
-        # the group exists so we delete it
-        if guacamole_connections_group_exists:
-
-            # if force_deletion=true we delete the group without any extra check
-            if module.params.get('force_deletion'):
-
-                try:
-                    guacamole_delete_connections_group(
-                        base_url=module.params.get('base_url'),
-                        validate_certs=module.params.get('validate_certs'),
-                        datasource=guacamole_token['dataSource'],
-                        auth_token=guacamole_token['authToken'],
-                        group_numeric_id=group_numeric_id
-                    )
-                except GuacamoleError as e:
-                    module.fail_json(msg=str(e))
-
-            # if we are here it's because the group exists and force_deletion=false
-            else:
-
-                # Query all the existing guacamole connections in this group
-                # to verify if the group we want to delete has any child connection
-                try:
-                    connections_in_group = guacamole_get_connections(
-                        base_url=module.params.get('base_url'),
-                        validate_certs=module.params.get('validate_certs'),
-                        datasource=guacamole_token['dataSource'],
-                        group=group_numeric_id,
-                        auth_token=guacamole_token['authToken'],
-                    )
-                except GuacamoleError as e:
-                    module.fail_json(msg=str(e))
-
-                # if the group is empty (no child connections) we delete it
-                if not connections_in_group:
-
-                    try:
-                        guacamole_delete_connections_group(
-                            base_url=module.params.get('base_url'),
-                            validate_certs=module.params.get('validate_certs'),
-                            datasource=guacamole_token['dataSource'],
-                            auth_token=guacamole_token['authToken'],
-                            group_numeric_id=group_numeric_id
-                        )
-                    except GuacamoleError as e:
-                        module.fail_json(msg=str(e))
-
-                # if the group has child connections and force_deletion=false fail and exit
-                else:
-                    module.fail_json(
-                        msg="Won't delete a group with child connections unless force_deletion=True"
-                    )
-
-        # if the group to delete doesn't exists we just print a message
+    # ABSENT ---------------------------------------------------------------- #
+    if module.params["state"] == "absent":
+        if not group_exists:
+            result["msg"] = "Connections group '{}' does not exist".format(module.params["group_name"])
         else:
+            # Check for child connections if not forcing deletion
+            if not module.params["force_deletion"]:
+                try:
+                    childs = guacamole_get_connections(
+                        base_url=module.params["base_url"],
+                        validate_certs=module.params["validate_certs"],
+                        datasource=datasource,
+                        group=group_id,
+                        auth_token=auth_token,
+                    )
+                except GuacamoleError as exc:
+                    module.fail_json(msg=str(exc))
+                if childs:
+                    module.fail_json(msg="Group has child connections – set force_deletion=true to override")
+            try:
+                _api_call(
+                    URL_DELETE_CONNECTIONS_GROUP.format(
+                        url=module.params["base_url"], datasource=datasource, group_id=group_id, token=auth_token
+                    ),
+                    "DELETE",
+                    module.params["validate_certs"],
+                )
+            except Exception as exc:
+                module.fail_json(msg=str(exc))
 
-            result['msg'] = "Connections group '%s' doesn't exists. Not doing anything" \
-                            % (module.params.get('group_name'))
-
-    # Get existing guacamole connections groups AFTER to check if something changed
+    # Groups AFTER ---------------------------------------------------------- #
     try:
-        guacamole_connections_groups_after = guacamole_get_connections_groups(
-            base_url=module.params.get('base_url'),
-            validate_certs=module.params.get('validate_certs'),
-            datasource=guacamole_token['dataSource'],
-            auth_token=guacamole_token['authToken'],
+        groups_after = guacamole_get_connections_groups(
+            base_url=module.params["base_url"],
+            validate_certs=module.params["validate_certs"],
+            datasource=datasource,
+            auth_token=auth_token,
         )
-    except GuacamoleError as e:
-        module.fail_json(msg=str(e))
+    except GuacamoleError as exc:
+        module.fail_json(msg=str(exc))
 
-    # check if something changed (idempotence)
-    if guacamole_connections_groups_before != guacamole_connections_groups_after:
-        result['changed'] = True
+    if groups_before != groups_after:
+        result["changed"] = True
 
-    # return connections_group_info{} for the added/updated/deleted connections group
-    if module.params.get('state') == 'present':
-        for group_id, group_info in guacamole_connections_groups_after.items():
-            if group_info['name'] == module.params.get('group_name'):
-                result['connections_group_info'] = group_info
+    # Populate connections_group_info
+    if module.params["state"] == "present":
+        for gid, ginfo in groups_after.items():
+            if ginfo["name"] == module.params["group_name"]:
+                result["connections_group_info"] = ginfo
                 break
-    else:
-        for group_id, group_info in guacamole_connections_groups_before.items():
-            if group_info['name'] == module.params.get('group_name'):
-                result['connections_group_info'] = group_info
+    elif module.params["state"] == "absent":
+        for gid, ginfo in groups_before.items():
+            if ginfo["name"] == module.params["group_name"]:
+                result["connections_group_info"] = ginfo
                 break
 
     module.exit_json(**result)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
